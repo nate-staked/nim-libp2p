@@ -29,7 +29,7 @@ import
   upgrademngrs/muxedupgrade,
   address_manager,
   autotls/service,
-  nameresolving/nameresolver,
+  nameresolving/[nameresolver, dnsresolver],
   errors,
   utils/opt
 
@@ -86,6 +86,7 @@ type
     protoVersion: string
     agentVersion: string
     nameResolver: NameResolver
+    dnsResolutionEnabled: bool
     dialRanking: bool
     dialBackoff: Opt[DialBackoffConfig]
     peerStoreCapacity: Opt[int]
@@ -116,6 +117,7 @@ proc new*(T: type[SwitchBuilder]): T =
     scoring: PeerScoring(),
     protoVersion: ProtoVersion,
     agentVersion: AgentVersion,
+    dnsResolutionEnabled: true,
     autonatV2ServerConfig: Opt.none(AutonatV2Config),
     natConfig: Opt.none(NATConfig),
     autotlsConfig: Opt.none(AutotlsConfig),
@@ -349,6 +351,12 @@ proc withNameResolver*(b: SwitchBuilder, nameResolver: NameResolver): SwitchBuil
   b.nameResolver = nameResolver
   b
 
+proc withoutNameResolver*(b: SwitchBuilder): SwitchBuilder =
+  ## Opt out of the default `DnsResolver`: the dialer will skip
+  ## dns/dns4/dns6/dnsaddr multiaddrs instead of resolving them.
+  b.dnsResolutionEnabled = false
+  b
+
 proc withDialRanking*(b: SwitchBuilder, enabled: bool = true): SwitchBuilder =
   b.dialRanking = enabled
   b
@@ -525,6 +533,12 @@ proc buildSwitch(b: SwitchBuilder): Switch {.raises: [LPError].} =
         )
       )
     )
+
+  if b.nameResolver.isNil and b.dnsResolutionEnabled:
+    # Without a name resolver the dialer silently skips
+    # dns/dns4/dns6/dnsaddr multiaddrs, so resolve them by default using
+    # the system nameservers (falling back to public resolvers).
+    b.nameResolver = DnsResolver.new(getSystemNameServers(), b.rng)
 
   let dialer = Dialer.new(
     peerInfo.peerId,
