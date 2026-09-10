@@ -106,22 +106,18 @@ proc expandDnsAddr(
 ): Future[seq[(MultiAddress, Opt[PeerId])]] {.
     async: (raises: [CancelledError, MaError, TransportAddressError, LPError])
 .} =
-  if not DNS.matchPartial(address):
+  if not address.containsDnsComponent():
     return @[(address, peerId)]
   if isNil(self.nameResolver):
-    info "Can't resolve DNSADDR without NameResolver", ma = address
+    info "Can't resolve a DNS multiaddress without NameResolver", ma = address
     return @[]
 
   trace "Start trying to resolve addresses"
+  # Keep the expected peer separate from the DNSADDR suffix. Records which
+  # include /p2p must agree with it, while records which omit /p2p remain valid.
+  # This mirrors go-libp2p's ResolveDNSAddr(expectedPeerID, address) contract.
   let
-    toResolve =
-      if peerId.isSome:
-        try:
-          address & MultiAddress.init(multiCodec("p2p"), peerId.tryGet()).tryGet()
-        except ResultError[void]:
-          raiseAssert "checked with if"
-      else:
-        address
+    toResolve = address
     resolved = await self.nameResolver.resolveDnsAddr(toResolve)
 
   debug "resolved addresses",
@@ -138,6 +134,11 @@ proc expandDnsAddr(
         raiseAssert "expandDnsAddr failed in expandDnsAddr protoArgument: " & e.msg
 
       let addrPeerId = PeerId.init(peerIdBytes).tryGet()
+      peerId.withValue(expectedPeerId):
+        if addrPeerId != expectedPeerId:
+          debug "Skipping DNSADDR record for a different peer",
+            expectedPeerId, recordPeerId = addrPeerId
+          continue
       addrs.add((resolvedAddress[0 ..^ 2].tryGet(), Opt.some(addrPeerId)))
     else:
       addrs.add((resolvedAddress, peerId))

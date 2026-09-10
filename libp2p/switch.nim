@@ -56,6 +56,7 @@ type
     dialer*: Dialer
     peerStore*: PeerStore
     nameResolver*: NameResolver
+    ownsNameResolver*: bool
     started: bool
     services*: seq[Service]
     rng*: Rng
@@ -341,6 +342,10 @@ proc stop*(s: Switch) {.async: (raises: [CancelledError]).} =
       warn "error cleaning up transports", description = exc.msg
 
   await s.ms.stop()
+
+  if s.ownsNameResolver and not s.nameResolver.isNil:
+    await s.nameResolver.close()
+    s.ownsNameResolver = false
 
   s.peerStore.close()
 

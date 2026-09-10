@@ -33,6 +33,9 @@ import
   errors,
   utils/opt
 
+when compileOption("threads"):
+  import nameresolving/systemresolver
+
 export
   switch, peerid, peerinfo, peeraddrpolicy, connection, multiaddress, crypto, errors,
   TLSPrivateKey, TLSCertificate, TLSFlags, ServerFlags, connmanager.ConnectionLimits,
@@ -335,7 +338,7 @@ proc withNameResolver*(b: SwitchBuilder, nameResolver: NameResolver): SwitchBuil
   b
 
 proc withoutNameResolver*(b: SwitchBuilder): SwitchBuilder =
-  ## Opt out of the default `DnsResolver`: the dialer will skip
+  ## Opt out of the default name resolver: the dialer will skip
   ## dns/dns4/dns6/dnsaddr multiaddrs instead of resolving them.
   b.dnsResolutionEnabled = false
   b
@@ -508,14 +511,22 @@ proc buildSwitch(b: SwitchBuilder): Switch {.raises: [LPError].} =
       )
     )
 
-  if b.nameResolver.isNil and b.dnsResolutionEnabled:
+  var
+    nameResolver = b.nameResolver
+    ownsNameResolver = false
+  if nameResolver.isNil and b.dnsResolutionEnabled:
     # Without a name resolver the dialer silently skips
-    # dns/dns4/dns6/dnsaddr multiaddrs, so resolve them by default using
-    # the system nameservers (falling back to public resolvers).
-    b.nameResolver = DnsResolver.new(getSystemNameServers(), b.rng)
+    # dns/dns4/dns6/dnsaddr multiaddrs. Prefer the OS resolver so hosts files,
+    # search domains, scoped resolvers and the OS cache behave like other
+    # libp2p implementations. Threadless builds retain the async UDP resolver.
+    when compileOption("threads"):
+      nameResolver = SystemResolver.new(rng = b.rng)
+    else:
+      nameResolver = DnsResolver.new(getSystemNameServers(), b.rng)
+    ownsNameResolver = true
 
   let dialer =
-    Dialer.new(peerInfo.peerId, connManager, peerStore, transports, ms, b.nameResolver)
+    Dialer.new(peerInfo.peerId, connManager, peerStore, transports, ms, nameResolver)
 
   let switch = Switch(
     peerInfo: peerInfo,
@@ -524,7 +535,8 @@ proc buildSwitch(b: SwitchBuilder): Switch {.raises: [LPError].} =
     connManager: connManager,
     peerStore: peerStore,
     dialer: dialer,
-    nameResolver: b.nameResolver,
+    nameResolver: nameResolver,
+    ownsNameResolver: ownsNameResolver,
     rng: b.rng,
     muxedUpgrade: muxedUpgrade,
     services: services,
